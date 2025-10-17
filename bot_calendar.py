@@ -1,117 +1,106 @@
-import json
-import base64
 import logging
-import datetime
-import os
+import re
+from datetime import datetime
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
-from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
 
-# 📜 Configuración de logs
+# Configuración de logging
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO
 )
 
-# 🔑 Token del bot de Telegram
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-if not TELEGRAM_TOKEN:
-    raise ValueError("❌ No se encontró TELEGRAM_TOKEN en las variables de entorno.")
-
-# 🔐 Permiso de lectura de Google Calendar
-SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
-
-# 🧩 Reconstruye token.json si viene como base64 (Render)
-if not os.path.exists("token.json"):
-    token_data = os.getenv("TOKEN_JSON_BASE64")
-    if token_data:
-        with open("token.json", "wb") as f:
-            f.write(base64.b64decode(token_data))
-        logging.info("✅ token.json reconstruido desde variable de entorno.")
-    else:
-        logging.warning("⚠️ No se encontró TOKEN_JSON_BASE64. Asegúrate de configurarlo en Render.")
-
-def get_calendar_service():
-    """Inicializa y devuelve el servicio de Google Calendar"""
-    creds = None
-
-    if os.path.exists("token.json"):
-        creds = Credentials.from_authorized_user_file("token.json", SCOPES)
-    else:
-        creds_json = os.getenv("GOOGLE_CREDENTIALS")
-        if not creds_json:
-            raise ValueError("❌ No se encontró GOOGLE_CREDENTIALS en las variables de entorno.")
-
-        # Guardar credenciales en un archivo temporal
-        with open("credentials.json", "w") as f:
-            json.dump(json.loads(creds_json), f)
-
-        # ⚠️ No podemos usar InstalledAppFlow en Render (sin navegador)
-        raise RuntimeError("❌ Debes subir token.json en Render o usar TOKEN_JSON_BASE64.")
-
-    service = build("calendar", "v3", credentials=creds)
-    return service
-
-# 🧠 Comando de inicio con botones
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        ["📅 Hoy", "👋 Saludar"]
-    ]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
-    await update.message.reply_text(
-        "¡Hola! Selecciona una opción 👇",
-        reply_markup=reply_markup
-    )
-
-# Función para ver clases de hoy
-async def hoy(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    service = get_calendar_service()
-
-    now = datetime.datetime.utcnow()
-    inicio_dia = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat() + "Z"
-    fin_dia = now.replace(hour=23, minute=59, second=59, microsecond=0).isoformat() + "Z"
+# Función para obtener los eventos de Google Calendar
+def obtener_eventos(service):
+    from datetime import datetime, timedelta
+    now = datetime.utcnow().isoformat() + 'Z'
+    end_of_day = (datetime.utcnow().replace(hour=23, minute=59, second=59)).isoformat() + 'Z'
 
     events_result = service.events().list(
-        calendarId="primary",
-        timeMin=inicio_dia,
-        timeMax=fin_dia,
+        calendarId='primary',
+        timeMin=now,
+        timeMax=end_of_day,
         singleEvents=True,
-        orderBy="startTime"
+        orderBy='startTime',
+        conferenceDataVersion=1
     ).execute()
+    return events_result.get('items', [])
 
-    events = events_result.get("items", [])
+# Función para formatear los eventos
+def formatear_evento(event):
+    summary = event.get('summary', 'No especificado')
+    match = re.match(r"(.+?)\s+(.+)\s+(\(.+\))", summary)
+    if match:
+        codigo = match.group(1)
+        curso = match.group(2)
+        nrc = match.group(3)
+    else:
+        codigo = "No especificado"
+        curso = summary
+        nrc = ""
 
-    if not events:
-        await update.message.reply_text("😎 Hoy no tienes clases.")
+    start = event['start'].get('dateTime', event['start'].get('date'))
+    end = event['end'].get('dateTime', event['end'].get('date'))
+
+    start_time = datetime.fromisoformat(start).strftime('%H:%M')
+    end_time = datetime.fromisoformat(end).strftime('%H:%M')
+    hora = f"{start_time} - {end_time}"
+
+    link = "No disponible"
+    if 'conferenceData' in event and 'entryPoints' in event['conferenceData']:
+        for ep in event['conferenceData']['entryPoints']:
+            if ep.get('entryPointType') == 'video':
+                link = ep.get('uri')
+
+    mensaje = f"🧾 Curso: {curso}\n"
+    mensaje += f"⏰ Hora: {hora}\n"
+    mensaje += f"🏫 Salón: Google Meet\n"
+    mensaje += f"🔗 Link de la clase: {link}\n"
+    mensaje += f"📌 Código: {codigo}\n"
+    mensaje += f"📚 NRC: {nrc}\n\n"
+
+    return mensaje
+
+# Función que maneja el botón "Hoy"
+async def mostrar_clases_hoy(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Cargar credenciales de Google (ajusta según tu proyecto)
+    creds = Credentials.from_authorized_user_file('token.json', ['https://www.googleapis.com/auth/calendar.readonly'])
+    service = build('calendar', 'v3', credentials=creds)
+
+    eventos = obtener_eventos(service)
+    if not eventos:
+        await update.callback_query.message.edit_text("No tienes clases hoy 😴")
         return
 
-    msg = "📚 *Clases de hoy:*\n\n"
-    for event in events:
-        start = event["start"].get("dateTime", event["start"].get("date"))
-        hora = datetime.datetime.fromisoformat(start.replace("Z", "+00:00")).strftime("%H:%M")
-        curso = event.get("summary", "Sin título")
-        salon = event.get("location", "No especificado")
-        msg += f"🧾 *Curso:* {curso}\n⏰ *Hora:* {hora}\n🏫 *Salón:* {salon}\n\n"
+    mensaje = "📚 Clases de hoy:\n\n"
+    for event in eventos:
+        mensaje += formatear_evento(event)
 
-    await update.message.reply_text(msg, parse_mode="Markdown")
+    await update.callback_query.message.edit_text(mensaje)
 
-# Maneja mensajes de los botones
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
+# Función que maneja /start
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("📅 Hoy", callback_data='hoy')],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text('¡Hola! Selecciona una opción:', reply_markup=reply_markup)
 
-    if text == "📅 Hoy":
-        await hoy(update, context)
-    elif text == "👋 Saludar":
-        await update.message.reply_text("¡Hola! 😎 ¿Listo para tus clases de hoy?")
-    else:
-        await update.message.reply_text("No entendí eso 😅, usa los botones.")
+# Callback para los botones
+async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
 
-def main():
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
-    app.run_polling()
+    if query.data == 'hoy':
+        await mostrar_clases_hoy(update, context)
 
-if __name__ == "__main__":
-    main()
+# Crear aplicación del bot
+app = ApplicationBuilder().token("TU_TOKEN_AQUI").build()
+
+# Agregar handlers
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CallbackQueryHandler(button))
+
+# Ejecutar bot
+app.run_polling()
