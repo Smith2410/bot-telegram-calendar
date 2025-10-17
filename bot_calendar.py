@@ -11,7 +11,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 # 🔑 Tu token del bot de Telegram
 TOKEN = os.getenv("TELEGRAM_TOKEN")
-app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+app = ApplicationBuilder().token(TOKEN).build()
 
 # 🔐 Permiso para leer tu Google Calendar
 SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
