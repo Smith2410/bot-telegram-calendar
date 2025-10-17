@@ -1,3 +1,5 @@
+import json
+import base64
 import logging
 import datetime
 import os.path
@@ -12,6 +14,13 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 # 🔑 Tu token del bot de Telegram
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+
+# 🧠 Si el token.json no existe, lo reconstruimos desde base64 (Render)
+if not os.path.exists("token.json"):
+    token_data = os.getenv("TOKEN_JSON_BASE64")
+    if token_data:
+        with open("token.json", "wb") as f:
+            f.write(base64.b64decode(token_data))
 
 # 🔐 Permiso para leer tu Google Calendar
 SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
