@@ -1,6 +1,7 @@
 import logging
 import datetime
 import os.path
+import os
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -9,7 +10,7 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 # 🔑 Tu token del bot de Telegram
-TELEGRAM_TOKEN = "TELEGRAM_TOKEN"
+TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 # 🔐 Permiso para leer tu Google Calendar
 SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
